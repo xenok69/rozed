@@ -1,0 +1,12 @@
+/target
+.rozed-tmp/
+rozed.toml
+*.backup
+
+docs/superpowers/
+.superpowers/
+
+.claude/
+CLAUDE.md
+
+crates/rozed-zed/target/
