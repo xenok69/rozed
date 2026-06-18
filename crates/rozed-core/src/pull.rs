@@ -44,14 +44,14 @@ pub fn write_script(
     if local_path.exists() {
         let backup_path = PathBuf::from(format!("{}.backup", local_path.display()));
         std::fs::copy(&local_path, &backup_path)?;
-        println!("[BACKUP] {}.backup created", local_path.display());
+        eprintln!("[BACKUP] {}.backup created", local_path.display());
     }
 
     if let Some(parent) = local_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&local_path, &file.source)?;
-    println!("[SUCCESS] {} written", local_path.display());
+    eprintln!("[SUCCESS] {} written", local_path.display());
     Ok(())
 }
 

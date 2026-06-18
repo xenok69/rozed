@@ -361,10 +361,10 @@ pullBtn.MouseButton1Click:Connect(function()
                 local childPath = path .. "/" .. child.Name
                 if child:IsA("ModuleScript") then
                     table.insert(allScripts, { roblox_path = childPath, name = child.Name, kind = "ModuleScript", source = child.Source })
-                elseif child:IsA("Script") then
-                    table.insert(allScripts, { roblox_path = childPath, name = child.Name, kind = "Script", source = child.Source })
                 elseif child:IsA("LocalScript") then
                     table.insert(allScripts, { roblox_path = childPath, name = child.Name, kind = "LocalScript", source = child.Source })
+                elseif child:IsA("Script") then
+                    table.insert(allScripts, { roblox_path = childPath, name = child.Name, kind = "Script", source = child.Source })
                 end
                 walk(child, childPath)
             end

@@ -6,3 +6,7 @@ schema_version = 1
 authors = ["rozed"]
 repository = "https://github.com/rozed/rozed"
 
+[language_servers.rozed]
+name = "Rozed"
+languages = ["Lua"]
+

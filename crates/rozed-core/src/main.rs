@@ -13,17 +13,22 @@ use server::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Respond to Zed's LSP initialize handshake in the background.
+    // rozed is not an LSP server, but Zed spawns it as one; answering
+    // initialize prevents Zed from killing the process on timeout.
+    tokio::task::spawn_blocking(lsp_handshake);
+
     let project_root = std::env::current_dir()?;
     let config = Config::load(&project_root)?;
 
-    println!("[INFO] rozed starting on port {}", config.port());
-    println!(
+    eprintln!("[INFO] rozed starting on port {}", config.port());
+    eprintln!(
         "[INFO] push_on_save={}, sync_interval_ms={}",
         config.push_on_save(),
         config.sync_interval_ms()
     );
     for (local, roblox) in &config.mappings {
-        println!("[INFO] mapping: {} -> {}", local, roblox);
+        eprintln!("[INFO] mapping: {} -> {}", local, roblox);
     }
 
     let (tx, _) = broadcast::channel::<events::Event>(256);
@@ -70,9 +75,63 @@ async fn main() -> Result<()> {
     });
 
     let addr = format!("127.0.0.1:{}", config.port());
-    println!("[CONNECTED] listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    eprintln!("[CONNECTED] listening on http://{}", addr);
     axum::serve(listener, server::router(state)).await?;
 
     Ok(())
+}
+
+fn lsp_handshake() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut stdout = stdout.lock();
+
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        let line = line.trim_end();
+        if !line.starts_with("Content-Length:") {
+            continue;
+        }
+        let Ok(len) = line["Content-Length:".len()..].trim().parse::<usize>() else {
+            continue;
+        };
+
+        let mut blank = String::new();
+        let _ = reader.read_line(&mut blank);
+
+        let mut body = vec![0u8; len];
+        if reader.read_exact(&mut body).is_err() {
+            break;
+        }
+        let body = String::from_utf8_lossy(&body);
+
+        if body.contains("\"initialize\"") {
+            let id = extract_lsp_id(&body).unwrap_or(1);
+            let result = format!(
+                r#"{{"jsonrpc":"2.0","id":{id},"result":{{"capabilities":{{}}}}}}"#
+            );
+            let _ = write!(stdout, "Content-Length: {}\r\n\r\n{}", result.len(), result);
+            let _ = stdout.flush();
+        } else if body.contains("\"shutdown\"") {
+            let id = extract_lsp_id(&body).unwrap_or(1);
+            let result = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":null}}"#);
+            let _ = write!(stdout, "Content-Length: {}\r\n\r\n{}", result.len(), result);
+            let _ = stdout.flush();
+            break;
+        }
+    }
+}
+
+fn extract_lsp_id(json: &str) -> Option<i64> {
+    let pos = json.find("\"id\"")?;
+    let rest = json[pos + 4..].trim_start_matches(|c: char| c == ' ' || c == ':');
+    rest.split(|c: char| !c.is_ascii_digit() && c != '-')
+        .next()
+        .and_then(|s| s.parse().ok())
 }

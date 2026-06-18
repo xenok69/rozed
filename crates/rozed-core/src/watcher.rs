@@ -44,7 +44,7 @@ pub async fn start_watcher(
                         }
                         if let Some(script) = resolve_path(rel, &mappings) {
                             let source = std::fs::read_to_string(&path).unwrap_or_default();
-                            println!("[PUSH] {} -> {}", script.name, script.roblox_path);
+                            eprintln!("[PUSH] {} -> {}", script.name, script.roblox_path);
                             tx.send(Event::ScriptPushed {
                                 name: script.name,
                                 kind: script.kind.as_str().to_string(),
