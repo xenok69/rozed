@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptKind {
@@ -23,7 +23,6 @@ pub struct ResolvedScript {
     pub name: String,
     pub kind: ScriptKind,
     pub roblox_path: String,
-    pub local_path: PathBuf,
 }
 
 pub fn resolve_path(
@@ -51,7 +50,6 @@ pub fn resolve_path(
                 name,
                 kind,
                 roblox_path,
-                local_path: local_path.to_path_buf(),
             });
         }
     }
