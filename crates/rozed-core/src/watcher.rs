@@ -9,11 +9,16 @@ use tokio::sync::broadcast;
 use crate::events::Event;
 use crate::mapping::resolve_path;
 
-pub async fn start_watcher(
+/// Dropping this handle stops the file watcher and the OS thread it owns.
+pub struct WatchHandle {
+    _watcher: RecommendedWatcher,
+}
+
+pub fn start_watcher(
     project_root: PathBuf,
     mappings: HashMap<String, String>,
     tx: broadcast::Sender<Event>,
-) -> Result<()> {
+) -> Result<WatchHandle> {
     let (ntx, nrx) = std::sync::mpsc::channel();
     let mut watcher = RecommendedWatcher::new(ntx, NotifyConfig::default())?;
 
@@ -27,9 +32,9 @@ pub async fn start_watcher(
     let ignore_file = project_root.join(".rozedignore");
     let (ignore_matcher, _) = ignore::gitignore::Gitignore::new(&ignore_file);
 
-    // Use a plain OS thread so the loop is decoupled from the tokio runtime lifecycle.
+    // nrx closes when watcher (_watcher in WatchHandle) is dropped, which
+    // naturally exits the loop and the thread.
     std::thread::spawn(move || {
-        let _watcher = watcher;
         for result in nrx {
             if let Ok(NotifyEvent {
                 kind: EventKind::Modify(_) | EventKind::Create(_),
@@ -58,7 +63,7 @@ pub async fn start_watcher(
         }
     });
 
-    Ok(())
+    Ok(WatchHandle { _watcher: watcher })
 }
 
 #[cfg(test)]
@@ -80,12 +85,7 @@ mod tests {
         mappings.insert("src/shared".into(), "ReplicatedStorage/Shared".into());
 
         let (tx, mut rx) = broadcast::channel(10);
-        let root = dir.path().to_path_buf();
-        let m = mappings.clone();
-
-        tokio::spawn(async move {
-            start_watcher(root, m, tx).await.unwrap();
-        });
+        let _handle = start_watcher(dir.path().to_path_buf(), mappings, tx).unwrap();
 
         sleep(Duration::from_millis(300)).await;
         fs::write(src.join("combat.module.luau"), "return {}").unwrap();
@@ -112,12 +112,7 @@ mod tests {
         mappings.insert("src/shared".into(), "ReplicatedStorage/Shared".into());
 
         let (tx, mut rx) = broadcast::channel(10);
-        let root = dir.path().to_path_buf();
-        let m = mappings.clone();
-
-        tokio::spawn(async move {
-            start_watcher(root, m, tx).await.unwrap();
-        });
+        let _handle = start_watcher(dir.path().to_path_buf(), mappings, tx).unwrap();
 
         sleep(Duration::from_millis(300)).await;
         fs::write(src.join("ignored.module.luau"), "return {}").unwrap();

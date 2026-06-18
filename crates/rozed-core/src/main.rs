@@ -5,7 +5,9 @@ mod pull;
 mod server;
 mod watcher;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 use anyhow::Result;
 use tokio::sync::broadcast;
 use config::Config;
@@ -33,12 +35,14 @@ async fn main() -> Result<()> {
 
     let (tx, _) = broadcast::channel::<events::Event>(256);
 
-    let poll_queue: Arc<std::sync::Mutex<Vec<events::Event>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let poll_queue: Arc<Mutex<Vec<events::Event>>> =
+        Arc::new(Mutex::new(Vec::new()));
+
+    let mappings_shared = Arc::new(RwLock::new(config.mappings.clone()));
 
     let state = Arc::new(AppState {
         project_root: project_root.clone(),
-        mappings: config.mappings.clone(),
+        mappings: mappings_shared.clone(),
         tx: tx.clone(),
         poll_queue: poll_queue.clone(),
     });
@@ -54,14 +58,24 @@ async fn main() -> Result<()> {
         }
     });
 
+    let watcher_holder: Arc<Mutex<Option<watcher::WatchHandle>>> =
+        Arc::new(Mutex::new(None));
+
     if config.push_on_save() {
+        match watcher::start_watcher(project_root.clone(), config.mappings.clone(), tx.clone()) {
+            Ok(handle) => *watcher_holder.lock().unwrap() = Some(handle),
+            Err(e) => eprintln!("[ERROR] watcher: {}", e),
+        }
+    }
+
+    // Watch rozed.toml so mappings and the file watcher update on save
+    {
         let root = project_root.clone();
-        let mappings = config.mappings.clone();
-        let tx2 = tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = watcher::start_watcher(root, mappings, tx2).await {
-                eprintln!("[ERROR] watcher: {}", e);
-            }
+        let reload_tx = tx.clone();
+        let reload_mappings = mappings_shared.clone();
+        let reload_holder = watcher_holder.clone();
+        tokio::task::spawn_blocking(move || {
+            run_config_watcher(root, reload_tx, reload_mappings, reload_holder);
         });
     }
 
@@ -80,6 +94,55 @@ async fn main() -> Result<()> {
     axum::serve(listener, server::router(state)).await?;
 
     Ok(())
+}
+
+fn run_config_watcher(
+    project_root: PathBuf,
+    tx: broadcast::Sender<events::Event>,
+    shared_mappings: Arc<RwLock<HashMap<String, String>>>,
+    watcher_holder: Arc<Mutex<Option<watcher::WatchHandle>>>,
+) {
+    use notify::{
+        Config as NotifyConfig, Event as NotifyEvent, EventKind,
+        RecommendedWatcher, RecursiveMode, Watcher,
+    };
+
+    let (ntx, nrx) = std::sync::mpsc::channel();
+    let mut config_watcher = match RecommendedWatcher::new(ntx, NotifyConfig::default()) {
+        Ok(w) => w,
+        Err(e) => { eprintln!("[ERROR] config watcher init: {}", e); return; }
+    };
+
+    let config_file = project_root.join("rozed.toml");
+    if let Err(e) = config_watcher.watch(&config_file, RecursiveMode::NonRecursive) {
+        eprintln!("[ERROR] watching rozed.toml: {}", e);
+        return;
+    }
+
+    let _config_watcher = config_watcher;
+
+    for result in nrx {
+        if let Ok(NotifyEvent { kind: EventKind::Modify(_) | EventKind::Create(_), .. }) = result {
+            match Config::load(&project_root) {
+                Ok(new_config) => {
+                    eprintln!("[INFO] rozed.toml reloaded");
+                    *shared_mappings.write().unwrap() = new_config.mappings.clone();
+
+                    let new_handle = if new_config.push_on_save() {
+                        watcher::start_watcher(
+                            project_root.clone(),
+                            new_config.mappings,
+                            tx.clone(),
+                        ).map_err(|e| eprintln!("[ERROR] restarting watcher: {}", e)).ok()
+                    } else {
+                        None
+                    };
+                    *watcher_holder.lock().unwrap() = new_handle;
+                }
+                Err(e) => eprintln!("[ERROR] reloading rozed.toml: {}", e),
+            }
+        }
+    }
 }
 
 fn lsp_handshake() {

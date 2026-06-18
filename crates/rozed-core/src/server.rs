@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use axum::{
     Router,
     extract::{State, WebSocketUpgrade},
@@ -17,7 +17,7 @@ use crate::pull::{check_conflict, write_script};
 
 pub struct AppState {
     pub project_root: PathBuf,
-    pub mappings: HashMap<String, String>,
+    pub mappings: Arc<RwLock<HashMap<String, String>>>,
     pub tx: broadcast::Sender<Event>,
     pub poll_queue: Arc<std::sync::Mutex<Vec<Event>>>,
 }
@@ -35,9 +35,10 @@ pub fn router(state: Arc<AppState>) -> Router {
 }
 
 async fn status_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let mappings = state.mappings.read().unwrap();
     Json(json!({
         "status": "running",
-        "mappings": state.mappings,
+        "mappings": *mappings,
     }))
 }
 
@@ -49,8 +50,9 @@ async fn pull_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PullRequest>,
 ) -> Json<Value> {
+    let mappings = state.mappings.read().unwrap();
     let files: Vec<_> = body.files.iter()
-        .map(|s| check_conflict(s, &state.project_root, &state.mappings))
+        .map(|s| check_conflict(s, &state.project_root, &*mappings))
         .collect();
     state.tx.send(Event::PullReady { files }).ok();
     Json(json!({ "ok": true }))
@@ -60,10 +62,11 @@ async fn pull_confirm_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PullRequest>,
 ) -> Json<Value> {
+    let mappings = state.mappings.read().unwrap();
     let mut errors: Vec<String> = vec![];
     for script in &body.files {
-        let file = check_conflict(script, &state.project_root, &state.mappings);
-        if let Err(e) = write_script(&file, &state.project_root, &state.mappings) {
+        let file = check_conflict(script, &state.project_root, &*mappings);
+        if let Err(e) = write_script(&file, &state.project_root, &*mappings) {
             errors.push(e.to_string());
         }
     }
@@ -119,7 +122,7 @@ mod tests {
         let (tx, _) = broadcast::channel(100);
         Arc::new(AppState {
             project_root: std::env::temp_dir(),
-            mappings: HashMap::new(),
+            mappings: Arc::new(RwLock::new(HashMap::new())),
             tx,
             poll_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
@@ -149,7 +152,7 @@ mod tests {
         let (tx, _) = broadcast::channel(100);
         let state = Arc::new(AppState {
             project_root: dir.path().to_path_buf(),
-            mappings,
+            mappings: Arc::new(RwLock::new(mappings)),
             tx,
             poll_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
