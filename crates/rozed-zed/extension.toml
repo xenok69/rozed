@@ -8,5 +8,5 @@ repository = "https://github.com/rozed/rozed"
 
 [language_servers.rozed]
 name = "Rozed"
-languages = ["Lua"]
+languages = ["Luau"]
 
