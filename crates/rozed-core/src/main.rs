@@ -3,10 +3,11 @@ mod events;
 mod mapping;
 mod pull;
 mod server;
+mod sync;
 mod watcher;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use anyhow::Result;
 use tokio::sync::broadcast;
@@ -23,7 +24,7 @@ async fn main() -> Result<()> {
     let project_root = std::env::current_dir()?;
     let config = Config::load(&project_root)?;
 
-    eprintln!("[INFO] rozed starting on port {}", config.port());
+    eprintln!("[INFO] rozed starting on port 5500");
     eprintln!(
         "[INFO] push_on_save={}, sync_interval_ms={}",
         config.push_on_save(),
@@ -80,15 +81,25 @@ async fn main() -> Result<()> {
     }
 
     let interval_ms = config.sync_interval_ms();
+    let sync_root = project_root.clone();
+    let sync_mappings = mappings_shared.clone();
+    let sync_tx = tx.clone();
     tokio::spawn(async move {
         let mut interval =
             tokio::time::interval(tokio::time::Duration::from_millis(interval_ms));
         loop {
             interval.tick().await;
+            let mappings = sync_mappings.read().unwrap().clone();
+            let root = sync_root.clone();
+            let tx2 = sync_tx.clone();
+            let window = std::time::Duration::from_millis(interval_ms);
+            tokio::task::spawn_blocking(move || {
+                sync::push_changed_files(&root, &mappings, &tx2, window);
+            });
         }
     });
 
-    let addr = format!("127.0.0.1:{}", config.port());
+    let addr = "127.0.0.1:5500".to_string();
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     eprintln!("[CONNECTED] listening on http://{}", addr);
     axum::serve(listener, server::router(state)).await?;
