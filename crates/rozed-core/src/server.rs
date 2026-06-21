@@ -29,6 +29,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/pull", post(pull_handler))
         .route("/pull/confirm", post(pull_confirm_handler))
         .route("/init", post(init_handler))
+        .route("/build", post(build_handler))
         .route("/events", get(ws_handler))
         .route("/events/poll", get(poll_handler))
         .with_state(state)
@@ -79,6 +80,16 @@ async fn pull_confirm_handler(
 
 async fn init_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
     state.tx.send(Event::StructureOk).ok();
+    Json(json!({ "ok": true }))
+}
+
+async fn build_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let root = state.project_root.clone();
+    let mappings = state.mappings.read().unwrap().clone();
+    let tx = state.tx.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::sync::push_all_files(&root, &mappings, &tx);
+    });
     Json(json!({ "ok": true }))
 }
 
@@ -170,5 +181,15 @@ mod tests {
         let resp = server.post("/pull/confirm").json(&body).await;
         resp.assert_status_ok();
         assert!(dir.path().join("src/shared/foo.module.luau").exists());
+    }
+
+    #[tokio::test]
+    async fn test_build_returns_ok() {
+        let app = router(test_state());
+        let server = TestServer::new(app).unwrap();
+        let resp = server.post("/build").json(&serde_json::json!({})).await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["ok"], true);
     }
 }
