@@ -5,7 +5,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    port: Option<u16>,
     sync_interval_ms: Option<u64>,
     push_on_save: Option<bool>,
     pub mappings: HashMap<String, String>,
@@ -19,7 +18,6 @@ impl Config {
         toml::from_str(&content).context("Failed to parse rozed.toml")
     }
 
-    pub fn port(&self) -> u16 { self.port.unwrap_or(5500) }
     pub fn sync_interval_ms(&self) -> u64 { self.sync_interval_ms.unwrap_or(500) }
     pub fn push_on_save(&self) -> bool { self.push_on_save.unwrap_or(true) }
 }
@@ -34,7 +32,6 @@ mod tests {
     fn test_parse_full_config() {
         let dir = TempDir::new().unwrap();
         let toml = r#"
-port = 5501
 sync_interval_ms = 250
 push_on_save = false
 
@@ -44,7 +41,6 @@ push_on_save = false
 "#;
         fs::write(dir.path().join("rozed.toml"), toml).unwrap();
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.port(), 5501);
         assert_eq!(config.sync_interval_ms(), 250);
         assert!(!config.push_on_save());
         assert_eq!(
@@ -58,7 +54,6 @@ push_on_save = false
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("rozed.toml"), "[mappings]\n").unwrap();
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.port(), 5500);
         assert_eq!(config.sync_interval_ms(), 500);
         assert!(config.push_on_save());
     }
