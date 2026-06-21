@@ -87,7 +87,11 @@ fn pid_path(project_root: &Path) -> PathBuf {
 // ── Port availability check ───────────────────────────────────────────────────
 
 fn is_server_running() -> bool {
-    std::net::TcpStream::connect(ADDR).is_ok()
+    std::net::TcpStream::connect_timeout(
+        &ADDR.parse().expect("ADDR is always valid"),
+        std::time::Duration::from_millis(500),
+    )
+    .is_ok()
 }
 
 // ── start -d ──────────────────────────────────────────────────────────────────
@@ -99,7 +103,7 @@ fn cmd_start_detached() -> Result<()> {
     }
     let exe = std::env::current_exe().context("[ERROR] cannot locate own executable")?;
     spawn_detached(&exe)?;
-    eprintln!("[INFO] rozed daemon started — run 'rozed stop' to stop");
+    eprintln!("[INFO] rozed daemon started - run 'rozed stop' to stop");
     Ok(())
 }
 
@@ -212,19 +216,28 @@ fn cmd_stop() -> Result<()> {
 
 #[cfg(windows)]
 fn kill_process(pid: u32) -> Result<()> {
-    std::process::Command::new("taskkill")
+    let out = std::process::Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/F"])
         .output()
-        .context("[ERROR] taskkill failed")?;
+        .context("[ERROR] taskkill failed to run")?;
+    if !out.status.success() {
+        return Err(anyhow::anyhow!(
+            "[ERROR] taskkill: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
     Ok(())
 }
 
 #[cfg(not(windows))]
 fn kill_process(pid: u32) -> Result<()> {
-    std::process::Command::new("kill")
+    let status = std::process::Command::new("kill")
         .arg(pid.to_string())
         .status()
-        .context("[ERROR] kill failed")?;
+        .context("[ERROR] kill failed to run")?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("[ERROR] kill: process {} not found", pid));
+    }
     Ok(())
 }
 
@@ -251,9 +264,9 @@ async fn cmd_status() -> Result<()> {
 
 async fn cmd_build() -> Result<()> {
     match http_post(ADDR, "/build", "{}").await {
-        Ok(_) => eprintln!("[OK] build triggered — all files pushed to Roblox"),
+        Ok(_) => eprintln!("[OK] build triggered - all files pushed to Roblox"),
         Err(_) => eprintln!(
-            "[ERROR] could not reach rozed — run 'rozed start' first"
+            "[ERROR] could not reach rozed - run 'rozed start' first"
         ),
     }
     Ok(())
@@ -291,11 +304,6 @@ async fn http_post(addr: &str, path: &str, body: &str) -> Result<String> {
 async fn run_server() -> Result<()> {
     let project_root = find_project_root()?;
     let config = Config::load(&project_root)?;
-
-    // Write PID file for `rozed stop`
-    let pid_dir = project_root.join(".rozed");
-    std::fs::create_dir_all(&pid_dir)?;
-    std::fs::write(pid_dir.join("rozed.pid"), std::process::id().to_string())?;
 
     eprintln!("[INFO] rozed starting on port {}", PORT);
     eprintln!(
@@ -371,6 +379,12 @@ async fn run_server() -> Result<()> {
     });
 
     let listener = tokio::net::TcpListener::bind(ADDR).await?;
+
+    // Write PID file for `rozed stop` — after bind succeeds so no stale PID on startup error
+    let pid_dir = project_root.join(".rozed");
+    std::fs::create_dir_all(&pid_dir)?;
+    std::fs::write(pid_dir.join("rozed.pid"), std::process::id().to_string())?;
+
     eprintln!("[CONNECTED] listening on http://{}", ADDR);
 
     // Serve until Ctrl-C, then clean up PID file
