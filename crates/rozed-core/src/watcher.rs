@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use anyhow::Result;
 use notify::{
     Config as NotifyConfig, Event as NotifyEvent, EventKind,
@@ -32,9 +33,12 @@ pub fn start_watcher(
     let ignore_file = project_root.join(".rozedignore");
     let (ignore_matcher, _) = ignore::gitignore::Gitignore::new(&ignore_file);
 
+    const DEBOUNCE: Duration = Duration::from_millis(100);
+
     // nrx closes when watcher (_watcher in WatchHandle) is dropped, which
     // naturally exits the loop and the thread.
     std::thread::spawn(move || {
+        let mut last_sent: HashMap<PathBuf, Instant> = HashMap::new();
         for result in nrx {
             if let Ok(NotifyEvent {
                 kind: EventKind::Modify(_) | EventKind::Create(_),
@@ -47,6 +51,10 @@ pub fn start_watcher(
                         if ignore_matcher.matched(rel, false).is_ignore() {
                             continue;
                         }
+                        let now = Instant::now();
+                        if last_sent.get(&path).map_or(false, |t| now.duration_since(*t) < DEBOUNCE) {
+                            continue;
+                        }
                         if let Some(script) = resolve_path(rel, &mappings) {
                             let source = std::fs::read_to_string(&path).unwrap_or_default();
                             eprintln!("[PUSH] {} -> {}", script.name, script.roblox_path);
@@ -56,6 +64,7 @@ pub fn start_watcher(
                                 roblox_path: script.roblox_path,
                                 source,
                             }).ok();
+                            last_sent.insert(path, now);
                         }
                     }
                 }

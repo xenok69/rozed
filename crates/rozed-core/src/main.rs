@@ -147,14 +147,19 @@ fn cmd_start_terminal() -> Result<()> {
 
 #[cfg(windows)]
 fn spawn_in_terminal(exe: &Path) -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // /D sets the new window's working directory so find_project_root() succeeds.
+    // `cmd /k` keeps the window alive after rozed exits, showing logs or error output.
     std::process::Command::new("cmd")
-        .args([
-            "/c",
-            "start",
-            "rozed",
-            exe.to_str().unwrap_or("rozed"),
-            "serve",
-        ])
+        .arg("/c")
+        .arg("start")
+        .arg("rozed")   // window title
+        .arg("/D")
+        .arg(&cwd)
+        .arg("cmd")
+        .arg("/k")
+        .arg(exe)
+        .arg("serve")
         .spawn()
         .context("[ERROR] failed to open a new terminal window")?;
     Ok(())
